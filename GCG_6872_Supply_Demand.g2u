@@ -1,0 +1,528 @@
+﻿Program.Sub.ScreenSU.Start
+Gui.f_Main..Create(BaseForm)
+Gui.f_Main..Caption("Custom MRP View (6872)")
+Gui.f_Main..Size(859,743)
+Gui.f_Main..MinX(0)
+Gui.f_Main..MinY(0)
+Gui.f_Main..Position(0,0)
+Gui.f_Main..AlwaysOnTop(False)
+Gui.f_Main..FontName("Tahoma")
+Gui.f_Main..FontSize(8.25)
+Gui.f_Main..ControlBox(True)
+Gui.f_Main..MaxButton(True)
+Gui.f_Main..MinButton(False)
+Gui.f_Main..MousePointer(0)
+Gui.f_Main..Moveable(True)
+Gui.f_Main..Sizeable(True)
+Gui.f_Main..ShowInTaskBar(True)
+Gui.f_Main..TitleBar(True)
+Gui.f_Main..Event(UnLoad,f_Main_UnLoad)
+Gui.f_Main.GsGcMRP.Create(GsGridControl)
+Gui.f_Main.GsGcMRP.Enabled(True)
+Gui.f_Main.GsGcMRP.Visible(True)
+Gui.f_Main.GsGcMRP.Zorder(0)
+Gui.f_Main.GsGcMRP.Size(1096,713)
+Gui.f_Main.GsGcMRP.Position(0,0)
+Gui.f_Main.GsGcMRP.Dock(5)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.bError.Declare(Boolean)
+V.Global.bUnattended.Declare(Boolean)
+V.Global.bLoadData.Declare(Boolean, False)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+V.Local.sRowContent.Declare(String,"")
+V.Local.iRowCount.Declare(Long,0)
+V.Local.i.Declare(Long,0)
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+'open a connection to the database
+F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN, V.Ambient.PUser, V.Ambient.PPass)
+
+'check to make sure it's firing from the Script 1 button of Supply and Demand
+F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+F.Intrinsic.Control.Case("52000")
+	'supply & demand -NEW - Entry Hook
+	V.Passed.Script1NewName.Set("Container MRP View (6872)")
+	F.Intrinsic.BDF.Load("ScriptCaps", "SupplyAndDemand-AccordionControlNavigation-bdf")
+	F.Intrinsic.BDF.Clone("ScriptCaps", "CaptionsCopy")
+	'Replace row index 24 caption value (column index 1)
+	F.Intrinsic.BDF.ReadRowCount("ScriptCaps", V.Local.iRowCount)
+	V.Local.iRowCount.Set(V.Local.iRowCount.--)
+		
+	F.Intrinsic.Control.For(V.Local.i, 0, V.Local.iRowCount, 1)
+		F.Intrinsic.BDF.ReadRow("ScriptCaps", V.Local.i, V.Local.sRowContent)
+		F.Intrinsic.Control.If(V.Local.i, <>, 25)
+			F.Intrinsic.BDF.WriteRow("CaptionsCopy", V.Local.sRowContent)
+		F.Intrinsic.Control.Else
+			F.Intrinsic.String.Split(V.Local.sRowContent, "|~|", V.Local.sRowContent)
+			V.Local.sRowContent(1).Set("Container MRP View")
+			F.Intrinsic.String.Join(V.Local.sRowContent, "|~|", V.Local.sRowContent)
+			F.Intrinsic.BDF.WriteRow("CaptionsCopy", V.Local.sRowContent)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Next(V.Local.i)
+	
+	F.Intrinsic.BDF.Save("CaptionsCopy", "SupplyAndDemand-AccordionControlNavigation-bdf")
+	F.Intrinsic.Control.CallSub(f_Main_Unload)
+F.Intrinsic.Control.Case("52050")
+	'supply and demand - NEW - Script 1 hook
+	'callsub to build the grid with the data for the selected part in Supply and Demand
+	F.Intrinsic.Control.CallSub(BuildGrid)
+
+	'callsub to format the gird
+	F.Intrinsic.Control.CallSub(FormatGrid)
+
+	'callsub to deserialize the grid
+	F.Intrinsic.Control.CallSub(Deserialize)
+
+	Gui.f_Main..ApplyTheme
+	'show the form
+	Gui.f_Main..Show
+F.Intrinsic.Control.EndSelect
+
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.BuildGrid.Start
+F.Intrinsic.Control.Try
+V.Local.bUseRevision.Declare(Boolean)
+V.Local.sPart.Declare(String)
+V.Local.sPartRev.Declare(String)
+V.Local.sRev.Declare(String)
+V.Local.sLoc.Declare(String)
+V.Local.sSQL.Declare(String)
+V.Local.sFullPart.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.fQtyOpen.Declare(Float)
+V.Local.iCnt.Declare(Long)
+V.Local.iCnt2.Declare(Long)
+V.Local.sFilter.Declare(String)
+V.Local.sSelect.Declare(String)
+V.Local.fContainerQty.Declare(Float)
+V.Local.fPOQty.Declare(Float)
+V.Local.fTotalPOQty.Declare(Float)
+
+'Get whether using Revision Level
+F.Global.General.ReadOption(70008,0,False,0,V.Local.bUseRevision)
+
+'check to see if datatable exists
+F.Intrinsic.Control.If(V.DataTable.dtMRP.Exists,=,True)
+	F.Data.DataTable.Close("dtMRP")
+F.Intrinsic.Control.EndIf
+
+F.Data.DataTable.Create("dtMRP", True)
+F.Data.DataTable.AddColumn("dtMRP", "TYPE", "STRING")
+F.Data.DataTable.AddColumn("dtMRP", "REFERENCE", "STRING")
+F.Data.DataTable.AddColumn("dtMRP", "CONTAINER_NO", "STRING")
+F.Data.DataTable.AddColumn("dtMRP", "DUE_DATE", "DATE")
+F.Data.DataTable.AddColumn("dtMRP", "CUSTOMER_VENDOR", "STRING")
+F.Data.DataTable.AddColumn("dtMRP", "OPEN_QTY", "FLOAT")
+'F.Data.DataTable.AddExpressionColumn("dtMRP", "BALANCE", "FLOAT", "SUM([OPEN_QTY])")
+F.Data.DataTable.AddColumn("dtMRP", "BALANCE", "FLOAT")
+F.Data.DataTable.AddColumn("dtMRP", "IS_CONTAINER", "BOOLEAN")
+
+F.Intrinsic.Control.If(V.Passed.PartNumber.Trim,<>,"")
+	'set the part, rev and location variables
+	'check to see if the company option to use revisions is checked
+	F.Intrinsic.Control.If(V.Local.bUseRevision,=,True)
+		F.Intrinsic.String.RPad(V.Passed.PartNumber, " ", 17, V.Local.sPart)
+		F.Intrinsic.String.RPad(V.Passed.PartNumberRevision, " ", 3, V.Local.sRev)
+		F.Intrinsic.String.Build("{0}{1}", V.Local.sPart, V.Local.sRev, V.Local.sPartRev)
+		V.Local.sFullPart.Set(V.Local.sPartRev.Trim)
+	F.Intrinsic.Control.Else
+		V.Local.sPart.Set(V.Passed.PartNumber)
+		V.Local.sFullPart.Set(V.Local.sPart)
+	F.Intrinsic.Control.EndIf
+	V.Local.sLoc.Set(V.Passed.LocationCode.Trim)
+	
+	'build sql statements to pull MRP data for the part the user has selected in S&D
+	'get the on hand qty for the part
+	F.Intrinsic.String.Build("SELECT QTY_ONHAND FROM V_INVENTORY_MSTR WHERE PART = '{0}' AND LOCATION = '{1}'", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL, V.Local.sRet)
+	F.Intrinsic.Control.If(V.Local.sRet.Trim,<>,"")
+		'go ahead and add row for invnetory on hand because we know it will always be at the top of supply and demand
+		F.Data.DataTable.AddRow("dtMRP", "TYPE", "", "REFERENCE", "On Hand","CONTAINER_NO", "", "CUSTOMER_VENDOR", "", "OPEN_QTY", V.Local.sRet.Float, "IS_CONTAINER", False, "BALANCE", V.Local.sRet.Float)
+	F.Intrinsic.Control.EndIf
+	
+	'check to see if the temp datatable exists
+	F.Intrinsic.Control.If(V.DataTable.dtTempWO.Exists,=,True)
+		F.Data.DataTable.Close("dtTempWO")
+	F.Intrinsic.Control.EndIf
+
+	'query job header
+	F.Intrinsic.String.Build("SELECT 'Job' as TYPE, (A.JOB + '-' + A.SUFFIX) AS REFERENCE, ((CAST(A.QTY_ORDER AS FLOAT)) - (CAST(A.QTY_COMPLETED AS FLOAT))) AS OPEN_QTY, A.DATE_DUE AS DUE_DATE, IF(B.NAME_CUSTOMER IS NULL, '*** MISSING CUSTOMER ***', B.NAME_CUSTOMER) AS CUSTOMER_VENDOR, CAST(0 AS BIT) AS IS_CONTAINER, '' AS CONTAINER_NO FROM V_JOB_HEADER A LEFT JOIN V_CUSTOMER_MASTER B ON A.CUSTOMER = B.CUSTOMER WHERE A.PART = '{0}' AND A.LOCATION = '{1}' AND A.DATE_CLOSED = '1900-01-01' ORDER BY A.DATE_DUE", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtTempWO", "con", V.Local.sSQL, True)
+	
+	'check to see if temp PO table is open. If it is, close it
+	F.Intrinsic.Control.If(V.DataTable.dtTempPO.Exists,=,True)
+		F.Data.DataTable.Close("dtTempPO")
+	F.Intrinsic.Control.EndIf
+
+	'query PO lines for all those POs that aren't in a container
+'	F.Intrinsic.String.Build("SELECT 'PO' AS TYPE, (A.PURCHASE_ORDER) + '-' + (LEFT(A.RECORD_NO,3)) AS 'REFERENCE', ((CAST(A.QTY_ORDER AS FLOAT))- (CAST(A.QTY_RECEIVED AS FLOAT))) AS OPEN_QTY, A.DATE_DUE_LINE AS DUE_DATE, IF(B.NAME_VENDOR IS NULL, '*** MISSING VENDOR ***', B.NAME_VENDOR) AS CUSTOMER_VENDOR, CAST(0 AS BIT) AS IS_CONTAINER, '' AS CONTAINER_NO FROM V_PO_LINES A LEFT JOIN V_VENDOR_MASTER B ON A.VENDOR = B.VENDOR WHERE A.PART = '{0}' AND A.LOCATION = '{1}' AND (A.PURCHASE_ORDER) + '-' + (LEFT(A.RECORD_NO,3)) NOT IN (SELECT (PO + '-'+ (LEFT(PO_LINE,3))) AS REFERENCE FROM V_PO_CONTAINER C WHERE A.PURCHASE_ORDER = C.PO) AND A.FLAG_RECV_CLOSE <> 'Y' ORDER BY A.DATE_DUE_LINE", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.Intrinsic.String.Build("SELECT 'PO' AS TYPE, (A.PURCHASE_ORDER) + '-' + (LEFT(A.RECORD_NO,3)) AS 'REFERENCE', ((CAST(A.QTY_ORDER AS FLOAT))- (CAST(A.QTY_RECEIVED AS FLOAT))) AS OPEN_QTY, A.DATE_DUE_LINE AS DUE_DATE, IF(B.NAME_VENDOR IS NULL, '*** MISSING VENDOR ***', B.NAME_VENDOR) AS CUSTOMER_VENDOR, CAST(0 AS BIT) AS IS_CONTAINER, '' AS CONTAINER_NO FROM V_PO_LINES A LEFT JOIN V_VENDOR_MASTER B ON A.VENDOR = B.VENDOR WHERE A.PART = '{0}' AND A.LOCATION = '{1}' AND A.FLAG_RECV_CLOSE <> 'Y' ORDER BY A.DATE_DUE_LINE", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtTempPO", "con", V.Local.sSQL, True)
+	
+	
+	'check to see if temp PO Container table is open. If it is, close it
+	F.Intrinsic.Control.If(V.DataTable.dtTempPOCont.Exists,=,True)
+		F.Data.DataTable.Close("dtTempPOCont")
+	F.Intrinsic.Control.EndIf
+	
+	'query PO_containers
+	F.Intrinsic.String.Build("SELECT 'Container' as TYPE, (A.PO + '-' + LEFT(A.PO_LINE,3)) AS REFERENCE, (CAST(A.QTY_IN_CONTAINER AS FLOAT) - (CAST(A.RECVD_QTY AS FLOAT))) AS OPEN_QTY, A.CONTAINER AS CONTAINER_NO, A.DUE_DATE AS DUE_DATE, IF(C.NAME_VENDOR IS NULL, '*** MISSING VENDOR ***', C.NAME_VENDOR) AS CUSTOMER_VENDOR, CAST(1 AS BIT) AS IS_CONTAINER FROM V_PO_CONTAINER A LEFT JOIN V_PO_LINES B ON A.PO = B.PURCHASE_ORDER AND A.PO_LINE = B.RECORD_NO LEFT JOIN V_VENDOR_MASTER C ON A.VENDOR = C.VENDOR WHERE B.PART = '{0}' AND B.LOCATION = '{1}' AND B.FLAG_RECV_CLOSE <> 'Y'  AND A.CLOSE_FLAG = 0 ORDER BY A.DUE_DATE", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtTempPOCont", "con", V.Local.sSQL, True)
+	
+	'loop through the PO containers to subtract the amount from the PO line that isn't in a container
+	F.Intrinsic.Control.If(V.DataTable.dtTempPO.RowCount--,>,-1)
+		F.Intrinsic.Control.For(V.Local.iCnt, 0, V.DataTable.dtTempPOCont.RowCount--,1)
+			F.Intrinsic.String.Build("[REFERENCE] = '{0}' ", v.DataTable.dtTempPOCont(V.Local.iCnt).REFERENCE!FieldValTrim, V.Local.sFilter)
+			V.Local.fContainerQty.Set(V.DataTable.dtTempPOCont(V.Local.iCnt).OPEN_QTY!FieldValFloat)
+			
+			F.Data.DataTable.Select("dtTempPO", V.Local.sFilter, V.Local.sSelect)
+			F.Intrinsic.Control.If(V.Local.sSelect.Trim,<>,"***NORETURN***")	
+				F.Intrinsic.String.Split(V.Local.sSelect, "*!*", V.Local.sSelect)
+				F.Intrinsic.Control.If(V.Local.sSelect.UBound,>,0)
+					F.Intrinsic.Control.For(V.Local.iCnt2,0, V.Local.sSelect.UBound,1)
+						F.Intrinsic.Control.If(V.Local.iCnt2,=,0)
+							V.Local.fPOQty.Set(V.DataTable.dtTempPO(V.Local.sSelect(V.Local.iCnt2)).OPEN_QTY!FieldValFloat)
+							F.Intrinsic.Math.Sub(V.Local.fPOQty, V.Local.fContainerQty, V.Local.fTotalPOQty)
+						F.Intrinsic.Control.Else
+							V.Local.fPOQty.Set(V.DataTable.dtTempPO(V.Local.sSelect(V.Local.iCnt2)).OPEN_QTY!FieldValFloat)
+							F.Intrinsic.Math.Sub(V.Local.fTotalPOQty, V.Local.fPOQty, V.Local.fTotalPOQty)
+						F.Intrinsic.Control.EndIf
+						F.Data.DataTable.SetValue("dtTempPO", V.Local.sSelect(V.Local.iCnt2), "OPEN_QTY", v.Local.fTotalPOQty)
+					F.Intrinsic.Control.Next(V.Local.iCnt2)
+				F.Intrinsic.Control.Else
+					V.Local.fPOQty.Set(V.DataTable.dtTempPO(V.Local.sSelect.Long).OPEN_QTY!FieldValFloat)
+					F.Intrinsic.Math.Sub(V.Local.fPOQty, V.Local.fContainerQty, V.Local.fPOQty)
+					f.Data.DataTable.SetValue("dtTempPO", V.Local.sSelect.Long, "OPEN_QTY", V.Local.fPOQty)
+				F.Intrinsic.Control.EndIf	
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.Next(V.Local.iCnt)
+	F.Intrinsic.Control.EndIf
+	
+	'Check to see if temp SO Table is open. If it is, close it
+	F.Intrinsic.Control.If(V.DataTable.dtTempSO.Exists,=,True)
+		F.Data.DataTable.Close("dtTempSO")
+	F.Intrinsic.Control.EndIf
+	'query Sales Order
+	F.Intrinsic.String.Build("SELECT 'Order' as TYPE, (A.ORDER_NO + '-' + LEFT(A.RECORD_NO,3)) AS REFERENCE, (((CAST(A.QTY_ORDERED AS FLOAT)) - CAST(A.QTY_SHIPPED AS FLOAT))*-1) AS OPEN_QTY, '' AS CONTAINER_NO, IF(B.NAME_CUSTOMER IS NULL, '*** MISSING CUSTOMER ***', B.NAME_CUSTOMER) AS CUSTOMER_VENDOR, A.ITEM_PROMISE_DT AS DUE_DATE, CAST(0 AS BIT) AS IS_CONTAINER FROM V_ORDER_LINES A LEFT JOIN V_CUSTOMER_MASTER B ON A.CUSTOMER = B.CUSTOMER WHERE A.PART = '{0}' AND A.LOCATION = '{1}' ORDER BY A.ITEM_PROMISE_DT", V.Local.sFullPart, V.Local.sLoc, V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtTempSO", "con", V.Local.sSQL, True)
+	
+	'check to see if the temp job requirements table is open. If it is, close it
+	F.Intrinsic.Control.If(V.DataTable.dtJobComs.Exists,=,True)
+		F.Data.DataTable.Close("dtJobComs")
+	F.Intrinsic.Control.EndIf
+	'query job committments
+	F.Intrinsic.String.Build("SELECT 'Job Req' AS TYPE, (A.JOB + '-' + A.SUFFIX) AS REFERENCE, (((CAST(A.QTY_COMMITTED AS FLOAT)) - (CAST(A.QTY_ISSUED AS FLOAT))) * -1) AS OPEN_QTY, '' AS CONTAINER_NO, IF(B.NAME_CUSTOMER IS NULL, '*** MISSING CUSTOMER ***', B.NAME_CUSTOMER) AS CUSTOMER_VENDOR, A.DATE_DUE AS DUE_DATE, CAST(0 AS BIT) AS IS_CONTAINER FROM V_JOB_COMMITMENTS A LEFT JOIN V_CUSTOMER_MASTER B ON A.CUSTOMER = B.CUSTOMER WHERE A.PART = '{0}'  AND A.LOCATION = '{1}' ORDER BY A.DATE_DUE", V.Local.sFullPart, V.Local.sLoc, v.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtJobComs", "con", V.Local.sSQL, True)
+	
+	
+	F.Intrinsic.Control.If(V.DataTable.dtTemp.Exists,=,True)
+		F.Data.DataTable.Close("dtTemp")
+	F.Intrinsic.Control.EndIf
+	
+	F.Data.DataTable.Create("dtTemp", True)
+	F.Data.DataTable.AddColumn("dtTemp", "TYPE", "STRING")
+	F.Data.DataTable.AddColumn("dtTemp", "REFERENCE", "STRING")
+	F.Data.DataTable.AddColumn("dtTemp", "CONTAINER_NO", "STRING")
+	F.Data.DataTable.AddColumn("dtTemp", "DUE_DATE", "DATE")
+	F.Data.DataTable.AddColumn("dtTemp", "CUSTOMER_VENDOR", "STRING")
+	F.Data.DataTable.AddColumn("dtTemp", "OPEN_QTY", "FLOAT")
+	F.Data.DataTable.AddColumn("dtTemp", "IS_CONTAINER", "BOOLEAN")
+	
+	'merge all temp tables into main temp table
+	F.Intrinsic.Control.If(V.DataTable.dtTempWO.RowCount--,>,-1)
+		F.Data.DataTable.Merge("dtTempWO", "dtTemp", True, 1)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(V.DataTable.dtTempPO.RowCount--,>,-1)
+		F.Data.DataTable.Merge("dtTempPO", "dtTemp", True, 1)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(V.DataTable.dtTempPOCont.RowCount--,>,-1)
+		F.Data.DataTable.Merge("dtTempPOCont", "dtTemp", True, 1)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(V.DataTable.dtTempSO.RowCount--,>,-1)
+		F.Data.DataTable.Merge("dtTempSO", "dtTemp", True, 1)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(V.DataTable.dtJobComs.RowCount--,>,-1)
+		F.Data.DataTable.Merge("dtJobComs", "dtTemp", True, 1)
+	F.Intrinsic.Control.EndIf
+	
+	'close the temp datatables
+	F.Data.DataTable.Close("dtTempWO")
+	F.Data.DataTable.Close("dtTempPO")
+	F.Data.DataTable.Close("dtTempPOCont")
+	F.Data.DataTable.Close("dtTempSO")
+	F.Data.DataTable.Close("dtJobComs")
+	
+	'delete the rows where the open qty is 0
+	F.Data.DataTable.Select("dtTemp", "[OPEN_QTY] = 0", V.Local.sSelect)
+	F.Intrinsic.Control.If(V.Local.sSelect.Trim,<>,"***NORETURN***")
+		F.Intrinsic.String.Split(V.Local.sSelect, "*!*", V.Local.sSelect)
+		F.Intrinsic.Control.If(V.Local.sSelect.UBound,>,0)
+			F.Intrinsic.Control.For(V.Local.iCnt2,V.Local.sSelect.UBound,0,-1)
+				F.Data.DataTable.DeleteRow("dtTemp",V.Local.sSelect(V.Local.iCnt2).Long)
+			F.Intrinsic.Control.Next(V.Local.iCnt2)
+		F.Intrinsic.Control.Else
+			F.Data.DataTable.DeleteRow("dtTemp",V.Local.sSelect.Long)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	
+	F.Data.DataTable.AcceptChanges("dtTemp")
+	'create dataview sorted by due date
+	F.Data.DataView.Create("dtTemp", "dvTemp",22, "", "[DUE_DATE] ASC")
+	f.Data.DataView.ToDataTable("dtTemp", "dvTemp", "dtTempMRP", True)
+	
+	'close temp datatable
+	F.Data.DataTable.Close("dtTemp")
+	
+	'merge temp MRP to MRP
+	F.Data.DataTable.Merge("dtTempMRP", "dtMRP", True,1)
+	
+	F.Data.DataTable.RunningTotal("dtMRP", "OPEN_QTY",0, "+", "BALANCE")
+
+F.Intrinsic.Control.Else
+	F.Intrinsic.UI.Msgbox("You must select a Part before you can continue.", "Required Field")
+	F.Intrinsic.Control.CallSub(f_Main_Unload)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.BuildGrid.End
+
+Program.Sub.FormatGrid.Start
+F.Intrinsic.Control.Try
+V.Local.sDefault.Declare(String)
+V.Local.sGV.Declare(String)
+V.Local.sProperty.Declare(String)
+
+Gui.f_Main.GsGcMRP.AddGridviewFromDatatable("gvMRP", "dtMRP")
+V.Local.sGV.Set("gvMRP")
+
+'set grid view properties
+Gui.f_Main.GsGcMRP.SetGridviewProperty(V.Local.sGV, "AllowSort", False)
+Gui.f_Main.GsGcMRP.SetGridviewProperty(V.Local.sGV, "AllowFilter", False)
+Gui.f_Main.GsGcMRP.SetGridviewProperty(V.Local.sGV, "OptionsViewShowGroupPanel", False)
+Gui.f_Main.GsGcMRP.SetGridviewProperty(V.Local.sGV, "OptionsViewColumnAutoWidth", True)
+Gui.f_Main.GsGcMRP.SetGridviewProperty(V.Local.sGV, "MultiSelect", False)
+
+'set properites for the columns
+V.Local.sProperty.Set("Caption")
+V.Local.sDefault.Set(" ")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, "Type")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, "Reference")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, "Container")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, "Due Date")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, "Customer/Vendor")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, "Open Qty")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, "Balance")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, "Is Container")
+
+V.Local.sProperty.Set("HeaderHAlignment")
+V.Local.sDefault.Set("Left")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, V.Local.sDefault)
+
+V.Local.sProperty.Set("HeaderFontBold")
+V.Local.sDefault.Set("True")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, V.Local.sDefault)
+
+V.Local.sProperty.Set("AllowEdit")
+V.Local.sDefault.Set("False")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, V.Local.sDefault)
+
+V.Local.sProperty.Set("ReadOnly")
+V.Local.sDefault.Set("True")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, V.Local.sDefault)
+
+V.Local.sProperty.Set("MinWidth")
+V.Local.sDefault.Set("75")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "TYPE", V.Local.sProperty, 60)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "REFERENCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CONTAINER_NO", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "CUSTOMER_VENDOR", V.Local.sProperty, 100)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, 85)
+
+V.Local.sProperty.Set("MaxWidth")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "IS_CONTAINER", V.Local.sProperty, 85)
+
+V.Local.sProperty.Set("DisplayCustomDatetime")
+V.Local.sDefault.Set("d")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "DUE_DATE", V.Local.sProperty, V.Local.sDefault)
+
+
+V.Local.sProperty.Set("DisplayCustomNumeric")
+V.Local.sDefault.Set("#.000000")
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "OPEN_QTY", V.Local.sProperty, V.Local.sDefault)
+Gui.f_Main.GsGcMRP.SetColumnProperty(V.Local.sGV, "BALANCE", V.Local.sProperty, V.Local.sDefault)
+
+
+Gui.f_Main.GsGcMRP.MainView(V.Local.sGV)
+
+V.Global.bLoadData.Set(True)
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.FormatGrid.End
+
+Program.Sub.Deserialize.Start
+F.Intrinsic.Control.Try
+V.Local.sSerialize.Declare(String)
+
+F.Global.Registry.ReadValue(V.Caller.User,V.Caller.CompanyCode,"gvMRP",6872,0,5,"",V.Local.sSerialize)
+F.Intrinsic.Control.If(V.Local.sSerialize,<>,"")
+	F.ODBC.Connection!common.OpenConnection(V.Ambient.Ccon,V.Ambient.Cuser,V.Ambient.Cpass)
+	F.ODBC.Connection!common.Execute("Delete From Gs_Registry Where Reg_ID = 6872 And Seq < 1000;")
+	F.ODBC.Connection!common.Close
+F.Intrinsic.Control.EndIf
+
+F.Global.Registry.ReadValue(V.Caller.User,V.Caller.CompanyCode, "gvMRP",6872,1000,6,"",V.Local.sSerialize)
+F.Intrinsic.Control.If(V.Local.sSerialize.Trim,<>,"")
+	Gui.f_Main.GsGcMRP.Deserialize(V.Local.sSerialize)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.Deserialize.End
+
+Program.Sub.f_Main_UnLoad.Start
+F.Intrinsic.Control.Try
+
+F.Intrinsic.Control.If(V.Global.bLoadData,=,True)
+	'callsub to serialize the grid
+	F.Intrinsic.Control.CallSub(Serialize)
+F.Intrinsic.Control.EndIf
+
+
+'close the connection
+F.ODBC.Connection!con.Close
+
+'end the program
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.f_Main_UnLoad.End
+
+Program.Sub.Serialize.Start
+F.Intrinsic.Control.Try
+V.Local.sSerialize.Declare(String)
+V.Local.sTemp.Declare(String)
+
+Gui.f_Main.GsGcMRP.Serialize("gvMRP", V.Local.sSerialize)
+F.Global.Registry.AddValue(V.Caller.User,V.Caller.CompanyCode,"gvMRP",6872,1000,False,"Serialize",False,0,-999.0,1/1/1980,12:00:00 AM,V.Local.sSerialize)
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(ErrorMessage, "ErrorNumber", V.Ambient.ErrorNumber, "ErrorDescription", V.Ambient.ErrorDescription, "Subroutine", V.Ambient.CurrentSubroutine, "UNATTENDED", V.Global.bUnattended, "Project", "6872", "ProjectTitle", "Custom Supply and Demand", "Callback", "f_Main_UnLoad")
+F.Intrinsic.Control.EndTry
+Program.Sub.Serialize.End
+
+Program.Sub.ErrorMessage.Start
+'basic error message for replacing catch block
+'this is really just for when printing the message and ending program
+'pass error number, error description, current subroutine
+'optional callback sub, this will be called before ending
+'optional unattended parameters, those subs may not exist if not using them but won't be called
+F.Intrinsic.Control.Try
+
+V.Local.iError.Declare(Long)
+V.Local.sErrorDescription.Declare(String)
+V.Local.sSubroutine.Declare(String)
+V.Local.sError.Declare(String)
+V.Local.bExists.Declare(Boolean)
+V.Local.sCallback.Declare(String)
+
+V.Local.iError.Set(V.Args.ErrorNumber)
+V.Local.sErrorDescription.Set(V.Args.ErrorDescription)
+V.Local.sSubroutine.Set(V.Args.Subroutine)
+
+'make sure we aren't in an error loop
+F.Intrinsic.Control.If(V.Global.bError)
+	F.Intrinsic.Control.End
+
+F.Intrinsic.Control.EndIf
+V.Global.bError.Set(True)
+
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Caller.ScriptFile, V.Ambient.Newline, V.Local.sSubroutine, V.Local.iError, V.Local.sErrorDescription, V.Ambient.GABVersion, V.Local.sError)
+
+F.Intrinsic.Variable.ArgExists("UNATTENDED", V.Local.bExists)
+F.Intrinsic.Control.If(V.Local.bExists)
+	F.Intrinsic.Control.If(V.Args.UNATTENDED)
+		F.Intrinsic.Control.CallSub(UnattendedErrorMessage, "MESSAGE", V.Local.sError, "PROJECT", V.Args.PROJECT, "PROJECTTITLE", V.Args.PROJECTTITLE)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Else
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Variable.ArgExists("Callback", V.Local.bExists)
+F.Intrinsic.Control.If(V.Local.bExists)
+	V.Local.sCallback.Set(V.Args.Callback.Trim)
+	F.Intrinsic.Control.CallSub(V.Local.sCallback)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+
+F.Intrinsic.Control.EndTry
+Program.Sub.ErrorMessage.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8357.19442$}$1
+${$6$}$acollins$}$20221208100441070$}$h98hERc2yV72q0GaUGlwSaoK/aefTdVk3MDOmjKC8J/maEKdnsJGp40/VCHbBq9R+j7uhTDqhAjyAtLfuE3etA==
+Program.Sub.Comments.End
